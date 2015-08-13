@@ -1,0 +1,1977 @@
+#!/usr/bin/python
+#
+# Copyright (c) 2015 by Parinya Thipchart <thipchart@gmail.com>
+#
+##################################################################
+
+import sys
+import os
+import getpass
+import getopt
+import cmd
+import shlex
+import time
+import pprint
+from ConfigParser import SafeConfigParser
+from pysphere import VIServer, VIException, VITask, VIProperty, MORTypes
+from pysphere.resources import VimService_services as VI
+
+
+class VMware(cmd.Cmd):
+    '''VMware command-line processing'''
+
+    def __init__(self, vcenter_hostname, username, password):
+        self.vcenter = VIServer()
+        self.vcenter_hostname = vcenter_hostname
+        self.username = username
+        self.password = password
+        cmd.Cmd.__init__(self)
+        self.prompt = '(vscli) '
+
+        if self.vcenter_hostname and self.username: 
+            if self.password:
+                self.do_connect('-u {} -s {} -p {}'.format(self.username, self.vcenter_hostname, self.password))
+            else:
+                self.do_connect('-u {} -s {}'.format(self.username, self.vcenter_hostname))
+
+    def __del__(self):
+        if self.vcenter and self.is_connected():
+            self.vcenter.disconnect()
+
+    def connect(self):
+        '''Making a connection to vcenter'''
+
+        import ssl
+
+        ssl._create_default_https_context = ssl._create_unverified_context
+
+        try:
+            self.vcenter.connect(self.vcenter_hostname, self.username, self.password)
+        except VIException as e:
+            sys.stdout.write('Cannot complete the login. Please check hostname, username or password.\n')
+            return False
+
+        return True
+
+    def is_connected(self):
+        '''Has the session expired?'''
+
+        return self.vcenter.is_connected() and self.vcenter.keep_session_alive()
+
+    def do_EOF(self, args):
+        '''Exit the application'''
+        return True
+
+    def do_exit(self, args):
+        '''Exit the application'''
+        return True
+
+    def do_quit(self, args):
+        '''Exit the application'''
+        return True
+
+    def emptyline(self):
+        '''What to do when command is empty'''
+        return
+
+        
+    def do_shell(self, args):
+        '''Running external command via SHELL'''
+        os.system(args)
+
+    def do_connect(self, args):
+        '''
+Description:
+    Connect to a vcenter server
+
+Usage:
+    connect -u username [-p password] -s vcenter_hostname
+
+Options:
+    -h - display help
+    -u - username
+    -p - password
+    -s - vcenter server
+
+Arguments:
+    None
+
+'''
+        username = ''
+        password = ''
+        vcenter_hostname = ''
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'u:s:p:h')
+        except getopt.GetoptError:
+            self.do_help('connect')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('connect')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('connect')
+                return
+            elif opt in ('-u'):
+                username = arg
+            elif opt in ('-p'):
+                password = arg
+            elif opt in ('-s'):
+                vcenter_hostname = arg
+
+        if len(username) == 0 or len(vcenter_hostname) == 0:
+            self.do_help('connect')
+            return
+
+        if not password:
+            self.password = getpass.getpass(username + "'s password: ")
+        else:
+            self.password = password
+
+        self.username = username
+        self.vcenter_hostname = vcenter_hostname
+
+        if self.connect():
+            self.prompt = '{}@{}> '.format(username, vcenter_hostname)
+        else:
+            self.prompt = '(vscli) '
+
+
+    def do_disconnect(self, args):
+        '''
+Description:
+    Disconnect from a vcenter server
+
+Usage:
+    disconnect
+
+Options:
+    None
+
+Arguments:
+    None
+
+'''
+        if self.vcenter and self.is_connected():
+            self.vcenter.disconnect()
+            self.vcenter_hostname = ''
+            self.password = ''
+            self.prompt = '(vscli) '
+
+
+    def do_lsdc(self, args):
+        '''
+Description:
+    List all datacenters
+
+Usage:
+    lsdc [-h]
+
+Options:
+    -h - display help
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lsdc')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lsdc')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lsdc')
+                return
+
+        dcs = sorted(self.vcenter.get_datacenters().values())
+
+        for dc in dcs:
+            print dc
+
+
+    def do_lscluster(self, args):
+        '''
+Description:
+    List all Clusters
+
+Usage:
+    lscluster [-h]
+
+Options:
+    -h - display help
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lscluster')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lscluster')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lscluster')
+                return
+
+        for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+            print 'DC:', dc_name
+
+            for cluster_mor, cluster_name in self.vcenter.get_clusters(from_mor=dc_mor).items():
+                print '    ' + cluster_name
+
+
+    def do_lshost(self, args):
+        '''
+Description:
+    List all ESX hosts
+
+Usage:
+    lshost [-h]
+
+Options:
+    -h - display help
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lshost')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lshost')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lshost')
+                return
+
+        for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+            print 'DC:', dc_name
+            for cluster_mor, cluster_name in self.vcenter.get_clusters(from_mor=dc_mor).items():
+                print '    CLUSTER:' ,cluster_name
+                for host_mor, host_name in self.vcenter.get_hosts(from_mor=cluster_mor).items():
+                    print '        ' + host_name
+                print
+
+
+    def do_lsds(self, args):
+        '''
+Description:
+    List all datastores
+
+Usage:
+    lsds [-h]
+
+Options:
+    -h - display help
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lsds')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lsds')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lsds')
+                return
+
+        for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+            print 'DC:', dc_name
+
+            for ds_mor, ds_name in self.vcenter.get_datastores(from_mor=dc_mor).items():
+                print '    ' + ds_name
+
+
+    def do_lsrp(self, args):
+        '''
+Description:
+    List all resource pools
+
+Usage:
+    lsrp [-h]
+
+Options:
+    -h - display help
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lsrp')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lsrp')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lsrp')
+                return
+
+        for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+            print 'DC:', dc_name
+            for cluster_mor, cluster_name in self.vcenter.get_clusters(from_mor=dc_mor).items():
+                print '    CLUSTER:' ,cluster_name
+                for resource_pool_mor, resource_pool_name in self.vcenter.get_resource_pools(from_mor=cluster_mor).items():
+                    print '        ' + resource_pool_name
+                print
+
+
+    def do_ls(self, args):
+        '''
+Description:
+    List VMs
+
+Usage:
+    ls [-h][-r resource_pool] [-s on|off]
+
+Options:
+    -h - display help
+    -r - resource pool
+    -s - list VMs with status powered on or off
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        resource_pool = None
+        status = None
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'r:s:h')
+        except getopt.GetoptError:
+            self.do_help('ls')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('ls')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('ls')
+                return
+            elif opt in ('-r'):
+                resource_pool = arg
+            elif opt in ('-s'):
+                # expected on or off
+                status = arg.lower()
+
+                if status == 'on':
+                    status = 'poweredOn'
+                elif status == 'off':
+                    status = 'poweredOff'
+                else:
+                    self.do_help('ls')
+                    return
+
+        vm_list = self.vcenter.get_registered_vms(resource_pool = resource_pool, status = status)
+
+        vm_list.sort()
+        for vm in vm_list:
+            print vm
+        print
+        print '{} VM(s) Found.'.format(len(vm_list))
+        print
+
+
+    def do_lstpl(self, args):
+        '''
+Description:
+    List ALL templates
+
+Usage:
+    lstpl [-h]
+
+Options:
+    -h - display help
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lstpl')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lstpl')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lstpl')
+                return
+
+        templates = self.vcenter.get_registered_vms(advanced_filters={'config.template':True})
+
+
+        templates.sort()
+        for template in templates:
+            print template
+        print
+        print '{} template(s) Found.'.format(len(templates))
+        print
+
+    def do_lsfolder(self, args):
+        '''
+Description:
+    List ALL Folders
+
+Usage:
+    lsfolder [-h]
+
+Options:
+    -h - display help
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lsfolder')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lsfolder')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lsfolder')
+                return
+
+        for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+            print 'DC:', dc_name
+            for folder_mor, folder_name in self.vcenter._get_managed_objects(MORTypes.Folder, dc_mor).items():
+                print '    ', folder_name
+
+
+    def do_status(self, args):
+        '''
+Description:
+    Print one or more VM status
+
+Usage:
+    status [-h] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('status')
+            return
+
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('status')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('status')
+                return
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                print '{}: {}'.format(name, vm.get_status())
+
+
+
+    def do_info(self, args):
+        '''
+Description:
+    Print one or more VM information
+
+Usage:
+    info [-h] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('info')
+            return
+
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('info')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('info')
+                return
+
+        def remove_keys(k, d):
+            '''Need this to remove all unwanted pysphere stuffs'''
+            for key in d.keys():
+                if type(d[key]) is dict:
+                    remove_keys(k, d[key])
+                elif key == k:
+                    del d[key]
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+                props = vm.get_properties(from_cache=False)
+            except VIException as e:
+                print e
+            else:
+                if props:
+                    # Remove _obj pysphere from the dict
+                    remove_keys('_obj', props)
+                    print '\n==========', name, '==========\n'
+                    print pprint.pformat(props)
+                    print
+
+
+    def do_get(self, args):
+        '''
+Description:
+    Print a VM property from one or more VMs
+    The properties you may get are:
+        name: Name of this entity, unique relative to its parent.
+        path: Path name to the configuration file for the virtual machine e.g., the .vmx file.
+        guest_id:
+        guest_full_name:
+        hostname:
+        ip_address:
+        mac_address:
+        net: [{connected, mac_address, ip_addresses, network},...]
+        memory_mb:
+        num_cpu:
+        disks:
+        files:
+        ...
+
+Usage:
+    get [-h] property vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    property vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('get')
+            return
+
+        if len(arguments) < 2:
+            self.do_help('get')
+            return
+        else:
+            vm_names = arguments[1:]
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('get')
+                return
+
+        prop = arguments[0]
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+                data = vm.get_property(prop)
+            except VIException as e:
+                print e
+            else:
+                print name + ': ' + str(prop)
+                print pprint.pformat(data)
+                print
+
+
+    def do_clone(self, args):
+        '''
+Description:
+    Cloning a VM or template to a new VM
+
+Usage:
+    clone [-h] -t template -n new_vm_name [-d datastore] [-e esx_host] [-f folder] [-r resource_pool] [-p on | off]
+
+Options:
+    -h - display help
+    -d - datastore for the new VM
+    -e - ESX host for the new VM will be registered
+    -f - an existing folder to put the VM to
+    -n - new VM name
+    -p - power VM on | off after create
+    -r - resource_pool
+    -t - template name
+
+Arguments:
+    None
+
+'''
+        username = ''
+        password = ''
+        vcenter_hostname = ''
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'u:s:p:h')
+        except getopt.GetoptError:
+            self.do_help('connect')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('connect')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('connect')
+                return
+            elif opt in ('-u'):
+                username = arg
+            elif opt in ('-p'):
+                password = arg
+            elif opt in ('-s'):
+                vcenter_hostname = arg
+
+        if len(username) == 0 or len(vcenter_hostname) == 0:
+            self.do_help('connect')
+            return
+
+        if not password:
+            self.password = getpass.getpass(username + "'s password: ")
+        else:
+            self.password = password
+
+        self.username = username
+        self.vcenter_hostname = vcenter_hostname
+
+        if self.connect():
+            self.prompt = '{}@{}> '.format(username, vcenter_hostname)
+        else:
+            self.prompt = '(vscli) '
+    def do_migrate(self, args):
+        '''
+Description:
+    Migrate one or more VMs
+
+Usage:
+    migrate [-h] [-t esx_host_fqdn] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -t - to which ESX host. If not specify, let DRS chooses
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+   
+        if not self.is_connected():
+            self.connect()
+
+        to_host = None
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 't:h')
+        except getopt.GetoptError:
+            self.do_help('migrate')
+            return
+
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('migrate')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('migrate')
+                return
+            elif opt in ('-t'):
+                to_host = arg.lower()
+
+        # If no targeted ESX host specified, let DRS does the job
+        if not to_host:
+            for name in vm_names:
+                try:
+                    vm = self.vcenter.get_vm_by_name(name)
+                    vm.migrate()
+                except VIException as e:
+                    print e
+        else:
+            # Looking for a target host provided by "-t"
+            found = False
+            for host_mor, host_name in self.vcenter.get_hosts().items():
+                if to_host == host_name.lower():
+                    found = True
+                    break
+                
+            if found:
+                for name in vm_names:
+                    try:
+                        vm = self.vcenter.get_vm_by_name(name)
+                        vm.migrate(host=host_mor)
+                    except VIException as e:
+                        print e
+            else:
+                sys.stdout.write('Error: {} is not a valid ESX host.\n'.format(to_host))
+
+
+    def do_mksnap(self, args):
+        '''
+Description:
+    Creating a VM snapshot for one or more VMs
+
+Usage:
+    mksnap [-a] -n snapshot_name [-i description] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -n - a snapshot name
+    -i - a snapshot description
+    -a - Wait for the process to finish (Async run)
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        sync_run = True
+        snapshot_name = ''
+        snapshot_description = ''
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'n:i:ah')
+        except getopt.GetoptError:
+            self.do_help('mksnap')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('mksnap')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('mksnap')
+                return
+            elif opt in ('-n'):
+                snapshot_name = arg
+            elif opt in ('-a'):
+                sync_run = False
+            elif opt in ('-i'):
+                snapshot_description = arg
+
+        if not snapshot_name:
+            self.do_help('mksnap')
+            return
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+                # Assuming:
+                # - we won't snapshot memory
+                # - we quiesce the file system
+                vm.create_snapshot(snapshot_name, description=snapshot_description, sync_run = sync_run, memory=False, quiesce=True)
+            except VIException as e:
+                print e
+
+
+
+    def do_rmsnap(self, args):
+        '''
+Description:
+    Delete one or more snapshots for one ore more VMs.
+    If a snapshot name is not specified, the current snapshot will be deleted.
+
+Usage:
+    rmsnap [-a] [-n snapshot_name] [-r] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -n - a snapshot name
+    -r - remove all child snapshots as well
+    -a - Wait for the process to finish (Async run)
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        sync_run = True
+        snapshot_name = ''
+        remove_children = False
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'n:rah')
+        except getopt.GetoptError:
+            self.do_help('rmsnap')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('rmsnap')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('rmsnap')
+                return
+            elif opt in ('-n'):
+                snapshot_name = arg
+            elif opt in ('-r'):
+                remove_children = True
+            elif opt in ('-a'):
+                sync_run = False
+
+        if snapshot_name:
+            # We remove the provided name snapshot
+            for name in vm_names:
+                try:
+                    vm = self.vcenter.get_vm_by_name(name)
+                    vm.delete_named_snapshot(snapshot_name, sync_run = sync_run, remove_children = remove_children)
+                except Exception as e:
+                    print e
+
+        else:
+            # We remove the current snapshot
+            for name in vm_names:
+                try:
+                    vm = self.vcenter.get_vm_by_name(name)
+                    vm.delete_current_snapshot(sync_run = sync_run, remove_children = remove_children)
+                except Exception as e:
+                    print e
+
+
+
+    def do_rvsnap(self, args):
+        '''
+Description:
+    Revert to a snapshot for one or more VMs.
+    If a snapshot name is not specified, will revert to the current snapshot.
+
+Usage:
+    rvsnap [-a] [-n snapshot_name] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -n - a snapshot name
+    -a - Wait for the process to finish (Async run)
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        sync_run = True
+        snapshot_name = ''
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'n:ah')
+        except getopt.GetoptError:
+            self.do_help('rvsnap')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('rvsnap')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('rvsnap')
+                return
+            elif opt in ('-n'):
+                snapshot_name = arg
+            elif opt in ('-a'):
+                sync_run = False
+
+        if snapshot_name:
+            # We revert to the provided snapshot name
+            for name in vm_names:
+                try:
+                    vm = self.vcenter.get_vm_by_name(name)
+                    vm.revert_to_named_snapshot(snapshot_name, sync_run = sync_run)
+                except Exception as e:
+                    print e
+
+        else:
+            # We revert to the current snapshot
+            for name in vm_names:
+                try:
+                    vm = self.vcenter.get_vm_by_name(name)
+                    vm.revert_to_snapshot(sync_run = sync_run)
+                except Exception as e:
+                    print e
+
+    def do_lssnap(self, args):
+        '''
+Description:
+    List all snapshots of one or more vSphere VMs
+
+Usage:
+    lssnap [-h] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+'''
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            #argv = args.strip().split()
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('lssnap')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('lssnap')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lssnap')
+                return
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+                snapshots = vm.get_snapshots()
+            except VIException as e:
+                print e
+            else:
+                if snapshots:
+                    print name + ':'
+                    for snapshot in snapshots:
+                        print '\tName:', snapshot.get_name()
+                        print '\tDescription:', snapshot.get_description()
+                        print '\tCreated:', time.strftime('%Y-%m-%d %H:%M:%S', snapshot.get_create_time())
+                        print '\tPath:', snapshot.get_path()
+                        print
+
+
+    def do_poweron(self, args):
+        '''
+Description:
+    Poweron one or more vSphere VMs
+
+Usage:
+    poweron [-h][-a] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -a - Wait for the process to finish (Async run)
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+'''
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        sync_run = True
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            #argv = args.strip().split()
+            options, arguments = getopt.getopt(argv, 'ah')
+        except getopt.GetoptError:
+            self.do_help('poweron')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('poweron')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('poweron')
+                return
+            elif opt in ('-a'):
+                sync_run = False
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                if vm.is_powered_off() or vm.is_suspended():
+                    # Powering on VM
+                    vm.power_on(sync_run = sync_run)
+                else:
+                    print 'VM {} is still ON'.format(name)
+
+    def do_shutdown(self, args):
+        '''
+Description:
+    PowerOff / Shutdown one or more vSphere VMs
+
+Usage:
+    poweroff [-h][-a] vm1 [vm2 vm3 ...]
+    shutdown [-h][-a][-f] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -a - Wait for the process to finish (Async run)
+    -f - Power Off (turn off the power switch)
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+'''
+
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        sync_run = True
+        force_shutdown = False
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            #argv = args.strip().split()
+            options, arguments = getopt.getopt(argv, 'afh')
+        except getopt.GetoptError:
+            self.do_help('shutdown')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('shutdown')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('shutdown')
+                return
+            elif opt in ('-a'):
+                sync_run = False
+            elif opt in ('-f'):
+                force_shutdown = True
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                if vm.is_powered_on():
+                    if force_shutdown:
+                        # Powering OFF the VM
+                        vm.power_off(sync_run)
+                    else:
+                        # Shutting down the VM
+                        try:
+                            vm.shutdown_guest() 
+                        #except:
+                        except VIException as e:
+                            print e
+                            #print 'Error shutting down {}. Make sure VMware tools are installed.'.format(name)
+
+                else:
+                    print 'VM {} may not be in a POWERED ON state'.format(name)
+
+
+    def do_poweroff(self, args):
+        '''Power Off one ore more VMs'''
+
+        args = '-f ' + args
+        self.do_shutdown(args)
+
+
+    def do_standby(self, args):
+        '''
+Description:
+    Put one or more vSphere VMs into standby
+
+Usage:
+    standby [-h] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+'''
+
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            #argv = args.strip().split()
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('standby')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('standby')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('standby')
+                return
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                if vm.is_powered_on():
+                    # Rebooting the VM
+                    try:
+                        vm.standby_guest() 
+                    #except:
+                    except VIException as e:
+                        print e
+                    #    print 'Error putting {} into standby. Make sure VMware tools are installed.'.format(name)
+
+                else:
+                    print 'VM {} may not be in a POWERED ON state'.format(name)
+
+    def do_reboot(self, args):
+        '''
+Description:
+    Reboot one or more vSphere VMs
+
+Usage:
+    reboot [-h] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+'''
+
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            #argv = args.strip().split()
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('reboot')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('reboot')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('reboot')
+                return
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                if vm.is_powered_on():
+                    # Rebooting the VM
+                    try:
+                        vm.reboot_guest() 
+                    #except:
+                    except VIException as e:
+                        print e
+                    #    print 'Error rebooting {}. Make sure VMware tools are installed.'.format(name)
+
+                else:
+                    print 'VM {} may not be in a POWERED ON state'.format(name)
+
+
+
+    def do_reset(self, args):
+        '''
+Description:
+    Reset one or more VMs.
+
+Usage:
+    reset [-a] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -a - Wait for the process to finish (Async run)
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        sync_run = True
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'ah')
+        except getopt.GetoptError:
+            self.do_help('reset')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('reset')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('reset')
+                return
+            elif opt in ('-a'):
+                sync_run = False
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                if vm.is_powered_on():
+                    # Reset the VM
+                    vm.reset(sync_run=sync_run) 
+                else:
+                    print 'VM {} may not be in a POWERED ON state'.format(name)
+
+
+    def do_suspend(self, args):
+        '''
+Description:
+    Suspend one or more VMs.
+
+Usage:
+    suspend [-a] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -a - Wait for the process to finish (Async run)
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        sync_run = True
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'ah')
+        except getopt.GetoptError:
+            self.do_help('reset')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('suspend')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('suspend')
+                return
+            elif opt in ('-a'):
+                sync_run = False
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                if vm.is_powered_on():
+                    # Reset the VM
+                    vm.suspend(sync_run=sync_run) 
+                else:
+                    print 'VM {} may not be in a POWERED ON state'.format(name)
+
+
+    def do_chktools(self, args):
+        '''
+Description:
+    Report VMware tools status on one or more VMs
+
+Usage:
+    chktools [-h] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'h')
+        except getopt.GetoptError:
+            self.do_help('chktools')
+            return
+
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('chktools')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('chktools')
+                return
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+            except VIException as e:
+                print e
+            else:
+                print '{}: {}'.format(name, vm.get_tools_status())
+
+    def do_uptools(self, args):
+        '''
+Description:
+    Upgrade VMware tools on one or more VMs
+
+Usage:
+    uptools [-h][-a] vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        sync_run = True
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'ha')
+        except getopt.GetoptError:
+            self.do_help('uptools')
+            return
+
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('uptools')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('uptools')
+                return
+            elif opt in ('-a'):
+                sync_run = False
+
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+                status = vm.get_tools_status()
+                if status == 'RUNNING OLD':
+                    vm.upgrade_tools(sync_run = sync_run)
+                elif status == 'RUNNING':
+                    print '{}: VMware tools is already current.'.format(name)
+                    break
+                else:
+                    print '{}: Unknown status of VMware tools. Skipped.'.format(name)
+                    break
+
+            except VIException as e:
+                print e
+
+
+    def get_dvs_portgroup_key(self, vcenter, nfmor, network_name):
+        # Find a portgroups key given the portgroup name.
+        # Grab all the distributed virtual portgroup's names and key's.
+        dvpg_mors = vcenter._retrieve_properties_traversal(property_names=['name','key'],from_node=nfmor, obj_type='DistributedVirtualPortgroup')
+        # Get the correct portgroup managed object.
+        dvpg_mor = None
+        for dvpg in dvpg_mors:
+            if dvpg_mor:
+                break
+            for p in dvpg.PropSet:
+                if p.Name == "name" and p.Val == network_name:
+                    dvpg_mor = dvpg
+                if dvpg_mor:
+                    break
+
+        # If dvpg_mor is empty we didn't find the named portgroup.
+        if dvpg_mor == None:
+            return None
+
+        # Get the portgroup key
+        portgroup_key = None
+        for p in dvpg_mor.PropSet:
+            if p.Name == "key":
+                portgroup_key = p.Val
+
+        return portgroup_key
+
+
+    def replace_dvs_portgroup(self, vcenter, vm, old_portgroup_key, new_portgroup_key):
+        '''Replace VM NICs associated with a new portgroup with a new portgroup'''
+
+        # Find virtual NIC devices
+        if vm:
+            vm_name = vm.get_property('name')
+            nics = []
+            for dev in vm.properties.config.hardware.device:
+                if dev._type in ["VirtualE1000", "VirtualE1000e","VirtualPCNet32", "VirtualVmxnet","VirtualNmxnet2", "VirtualVmxnet3"]:
+                    nics.append(dev._obj)
+
+        if len(nics) == 0:
+            print '{}: VM does not seem to have a NIC.'.format(vm)
+            return
+
+        for nic in nics:
+            old = nic.Backing.Port.PortgroupKey
+            if old == old_portgroup_key:
+                nic.Backing.Port.set_element_portgroupKey(new_portgroup_key)
+                nic.Backing.Port.set_element_portKey('')
+            
+        # Invoke ReconfigVM_Task
+        request = VI.ReconfigVM_TaskRequestMsg()
+        _this = request.new__this(vm._mor)
+        _this.set_attribute_type(vm._mor.get_attribute_type())
+        request.set_element__this(_this)
+
+        # Build a list of device change spec objects
+        affected_nics = []
+        for nic in nics:
+            spec = request.new_spec()
+            nic_change = spec.new_deviceChange()
+            nic_change.set_element_device(nic)
+            nic_change.set_element_operation('edit')
+            affected_nics.append(nic_change)
+
+        # Submit the device change list
+        spec.set_element_deviceChange(affected_nics)
+        request.set_element_spec(spec)
+        ret = vcenter._proxy.ReconfigVM_Task(request)._returnval
+    
+        # Wait for the task to finish
+        task = VITask(ret, vcenter)
+        status = task.wait_for_state([task.STATE_SUCCESS, task.STATE_ERROR])
+        if status == task.STATE_SUCCESS:
+            print '{}: Successfully reconfigured'.format(vm_name)
+        elif status == task.STATE_ERROR:
+            print '{}: Error reconfiguring "{}"'.format(vm_name), task.get_error_message()
+        else:
+            print '{}: VM not found'.format(vm_name)
+
+
+    def do_chdvspg(self, args):
+        '''
+Description:
+    For each VM, find VM NICs associated with old DVS portgroup and change to a new DVS portgroup
+
+Usage:
+    chdvspg [-h][-d datacenter_name] -o old_portgroup_name -n new_portgroup_name vm1 [vm2 vm3 ...]
+
+Options:
+    -h - display help
+    -d - datacenter_name, if not provided, will use the first datacenter found
+    -o - Old DVS portgroup name
+    -n - New DVS portgroup name
+
+Arguments:
+    vm1 [vm2 vm3 ...]
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        vm_names = []
+        old_porgroup_name = ''
+        new_porgroup_name = ''
+        datacenter_name = ''
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'd:o:n:h')
+        except getopt.GetoptError:
+            self.do_help('chdvspg')
+            return
+
+        # Get all vm names
+        if len(arguments) < 1:
+            self.do_help('chdvspg')
+            return
+        else:
+            vm_names = arguments
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('chdvspg')
+                return
+            elif opt in ('-o'):
+                old_portgroup_name = arg
+            elif opt in ('-n'):
+                new_portgroup_name = arg
+            elif opt in ('-d'):
+                datacenter_name = arg
+
+        if not old_portgroup_name or not new_portgroup_name:
+            self.do_help('chdvspg')
+            return
+
+        # We need portgropKey property not name to pass to VMware API
+        # This API also required a networkfolder object in a datacenter
+        # This is the reason we are doing all of the following
+
+        datacenter_mor = None
+        if not datacenter_name:
+            for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+                datacenter_mor = dc_mor
+                break
+        else:
+            for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+                if dc_name == datacenter_name:
+                    datacenter_mor = dc_mor
+                    break
+
+        if datacenter_mor is None:
+            sys.stderr.write('Error: cannot find a datacenter {}\n'.format(datacenter_name))
+            return
+
+        dc_props = VIProperty(self.vcenter, datacenter_mor)
+        nfolder_mor = dc_props.networkFolder._obj
+
+        old_portgroup_key = self.get_dvs_portgroup_key(self.vcenter, nfolder_mor, old_portgroup_name)
+        if not old_portgroup_key:
+            sys.stderr.write('Error: cannot find a DVS portgroup "{}"\n'.format(old_portgroup_name))
+            return
+
+        new_portgroup_key = self.get_dvs_portgroup_key(self.vcenter, nfolder_mor, new_portgroup_name)
+        if not new_portgroup_key:
+            sys.stderr.write('Error: cannot find a DVS portgroup "{}"\n'.format(new_portgroup_name))
+            return
+
+        # We revert to the provided snapshot name
+        for name in vm_names:
+            try:
+                vm = self.vcenter.get_vm_by_name(name)
+                self.replace_dvs_portgroup(self.vcenter, vm, old_portgroup_key, new_portgroup_key)
+            except Exception as e:
+                    print e
+
+
+    def do_lsdvspg(self, args):
+        '''
+Description:
+    List ALL DVS portgroups in a datacenter.
+    If not specified datacenter, will use the first datacenter found.
+
+Usage:
+    lsdvspg [-h][-d datacenter_name]
+
+Options:
+    -h - display help
+    -d - datacenter_name, if not provided, will use the first datacenter found
+
+Arguments:
+    None
+
+'''
+        if not self.is_connected():
+            self.connect()
+
+        datacenter_name = ''
+
+        # Parsing arguments
+        try:
+            # making an arry of arv to pass to getopt
+            argv = shlex.split(args)
+            options, arguments = getopt.getopt(argv, 'd:h')
+        except getopt.GetoptError:
+            self.do_help('lsdvspg')
+            return
+
+        if len(arguments) >= 1:
+            self.do_help('lsdvspg')
+            return
+
+        for opt, arg in options:
+            if opt in ('-h'):
+                self.do_help('lsdvspg')
+                return
+            elif opt in ('-d'):
+                datacenter_name = arg
+
+        # We need portgropKey property not name to pass to VMware API
+        # This API also required a networkfolder object in a datacenter
+        # This is the reason we are doing all of the following
+
+        datacenter_mor = None
+        if not datacenter_name:
+            for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+                datacenter_mor = dc_mor
+                break
+        else:
+            for dc_mor, dc_name in self.vcenter.get_datacenters().items():
+                if dc_name == datacenter_name:
+                    datacenter_mor = dc_mor
+                    break
+
+        if datacenter_mor is None:
+            sys.stderr.write('Error: cannot find a datacenter {}\n'.format(datacenter_name))
+            return
+
+        dc_props = VIProperty(self.vcenter, datacenter_mor)
+        nfolder_mor = dc_props.networkFolder._obj
+        pg_mors = self.vcenter._retrieve_properties_traversal(property_names=['name'],from_node=nfolder_mor, obj_type='DistributedVirtualPortgroup')
+        for pg in pg_mors:
+            for p in pg.PropSet:
+                if p.Name == 'name':
+                    print p.Val
+
+
+
+def usage():
+    print '''
+
+Description:
+    Basic commands to manage vSphere VMs.
+
+Usage:
+    vscli [-h][-c config-file][-u username][-p password] -s server
+
+Options:
+    -h - display help
+    -c - PATH to a config file
+    -s - VMware vCenter to connect to
+    -u - username, if not provided will use the SHELL vairable LOGNAME
+    -p - password
+
+'''
+
+def main():
+
+    username = ''
+    password = ''
+    vcenter_hostname = ''
+    config_path = '' 
+    config_name = '.vscli.cfg'
+
+    
+    # Parsing arguments
+    try:
+        options, args = getopt.getopt(sys.argv[1:], 'u:p:s:c:h')
+    except getopt.GetoptError:
+        usage()
+        sys.exit(1)
+
+    # There shouldn't be any args. Only *options* here
+    if len(args) >= 1:
+        usage()
+        sys.exit(1)
+
+    for opt, arg in options:
+        if opt in ('-h'):
+            usage()
+            sys.exit(0)
+        elif opt in ('-s'):
+            vcenter_hostname = arg.strip().lower()
+        elif opt in ('-u'):
+            username = arg
+        elif opt in ('-p'):
+            password = arg
+        elif opt in ('-c'):
+            config_path = arg
+
+    # -s vcenter is mandatory 
+    if not vcenter_hostname:
+        usage()
+        sys.exit(1)
+    
+    def get_option(parser, section, option):
+        '''Return option value or an empty string'''
+
+        # section names = vcenter name IN *LOWERCASE* ONLY
+        if section not in parser.sections():
+            return ''
+
+        if option in parser.options(section):
+            return parser.get(section, option)
+
+        return ''
+
+    if config_path:
+        if not os.path.isfile(config_path):
+            usage()
+            sys.exit(1)
+
+        else:
+            parser = SafeConfigParser()
+            parser.read(config_path)
+
+            if not username:
+                username = get_option(parser, vcenter_hostname, 'username')
+            if not password:
+                password = get_option(parser, vcenter_hostname, 'password')
+
+    elif os.path.isfile(os.getcwd() + os.path.sep + config_name):
+
+        config_path = os.getcwd() + os.path.sep + config_name
+        parser = SafeConfigParser()
+        parser.read(config_path)
+
+        if not username:
+            username = get_option(parser, vcenter_hostname, 'username')
+        if not password:
+            password = get_option(parser, vcenter_hostname, 'password')
+
+    elif os.path.isfile(os.environ['HOME'] + os.path.sep + config_name):
+        config_path = os.environ['HOME'] + os.path.sep + config_name
+        parser = SafeConfigParser()
+        parser.read(config_path)
+
+        if not username:
+            username = get_option(parser, vcenter_hostname, 'username')
+        if not password:
+            password = get_option(parser, vcenter_hostname, 'password')
+
+    if not username:
+        try:
+            username = os.environ['LOGNAME']
+        except KeyError:
+            sys.stdout.write('Error reading the environment variable LOGNAME.\n')
+            sys.exit(1)
+
+    VMware(vcenter_hostname, username, password).cmdloop()
+
+
+if __name__ == '__main__':
+    main()
+
